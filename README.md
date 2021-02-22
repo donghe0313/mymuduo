@@ -43,6 +43,68 @@ TcpConnection
 Acceptor EventLoopThreadPool
 ConnectionMap connections_;
 
+##### 遇到的问题（1）
+
+切换到使用自己仿写的muduo库进行聊天时，因为客户端因为Json::parse()错误中断，但登录时返回的信息能正常返回。
+
+原因：
+
+登录时返回的是同一个线程内的，但聊天时，若两个用户不在一个loop内，则是不同的线程。问题就出在mymuduo的TcpConnection::send(const std::string &buf)这个函数中。c_str（）返回的是string中的char*；
+
+因此在此线程中传完回调函数后
+
+ loop_->runInLoop(std::bind(&TcpConnection::sendInLoop,this,buf.c_str(),buf.size())); ，把内存空间释放掉，因此在执行此函数的loop中的指针为空悬指针；
+
+```c++
+void TcpConnection::send(const std::string &buf)
+{
+    if (state_ == kConnected)
+    {
+        if (loop_->isInLoopThread())
+        {
+            sendInLoop(buf.c_str(), buf.size());
+        }
+        else
+        {
+            loop_->runInLoop(std::bind(
+                &TcpConnection::sendInLoop,
+                this,
+                buf.c_str(),
+                buf.size()
+            ));
+        }
+    }
+}
+```
+
+解决方案：
+
+在类中新加一个成员变量std::string otherbuf ,且修改send函数，把传入的字符拷贝到此connection的otherbuf中
+
+void TcpConnection::send(const std::string &buf)
+
+    void TcpConnection::send(const std::string &buf)
+    {
+        if (state_ == kConnected)
+        {
+            if (loop_->isInLoopThread())
+            {
+                sendInLoop(buf.c_str(), buf.size());
+            }
+            else
+            {
+                otherbuf = buf;
+                loop_->runInLoop(std::bind(
+                    &TcpConnection::sendInLoop,
+                    this,
+                    otherbuf.c_str(),
+                    otherbuf.size()
+                ));
+            }
+        }
+    }
+
+
 ### #待写
 
 1、TcpClient编写客户端类
